@@ -1,0 +1,720 @@
+---
+title: "Text Mining Project_Tibble"
+author: "Oluwatobi Ogunronbi"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Step 1: Pre-work
+
+### Installing Packages
+
+```{r}
+#install.packages("stringi")
+#install.packages("stringr")
+#install.packages("qdap")
+#install.packages("rJava")
+#install.packages("ggthemes")hf
+#install.packages("tm")
+#install.packages("tidyr")
+#install.packages("tidytext")
+#install.packages("tidyverse")
+#install.packages("ggplot2")
+#install.packages("scales")
+#install.packages("tokenizers")
+#install.packages("reshape2")
+#install.packages("tools")
+#install.packages("textstem")
+
+```
+
+### Loading installed packages
+
+```{r}
+library(stringi)
+library(stringr)
+library(qdap)
+library(rJava)
+library(ggthemes)
+library(tm)
+library(tidyr)
+library(tidytext)
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(pdftools)
+library(tools)
+library(stopwords)
+library(readtext)
+library(dplyr)
+library(tokenizers)
+library(SnowballC)
+library(textstem)
+library(broom)
+```
+
+# Step 2: Import the Annual Reports
+
+We'll write a script to recursively list all PDF files within the "DJ-AR" folder, read their contents, and organize them in a tibble with columns for the company name, year, and the text content of each report. Given the folder structure and file naming convention you described, we can extract the year and company abbreviation directly from the filenames.
+
+```{r}
+# Path to the DJ-AR folder
+pdf_path <- "/Users/bigtobi/Desktop/ITEC_724/final_project/AR_data/DJ-AR"
+
+# Recursively list all PDF files
+pdf_files <- list.files(path = pdf_path, pattern = "\\.pdf$", full.names = TRUE, recursive = TRUE)
+pdf_filenames <- basename(pdf_files)
+
+print(pdf_filenames)
+class(pdf_filenames)
+```
+
+```{r}
+# Function to parse filename for year and company abbreviation
+parse_filename <- function(filename) {
+  parts <- str_match(basename(filename), "^(\\d{4})_10K_([A-Za-z]+)")
+  if(is.null(parts) || nrow(parts) == 0) {
+    year <- NA
+    company_abbreviation <- NA
+  } else {
+    year <- parts[, 2]
+    company_abbreviation <- parts[, 3]
+  }
+  return(tibble(year = year, company_abbreviation = company_abbreviation))
+}
+
+# Example file paths for testing
+test_filenames <- c("/Users/bigtobi/Desktop/ITEC_724/Project/AR_data/DJ-AR/4_HomeDepot/2022_10K_HD.pdf", "2021_10K_MSFT.pdf", "2022_10K_V.pdf", "NotMatchingFile.pdf")
+class(test_filenames)
+
+# Test the parsing function
+parsed_test <- map_df(test_filenames, parse_filename)
+print(parsed_test)
+```
+
+```{r}
+# Apply parsing and text extraction using both filenames and full paths
+annual_reports <- map_df(1:length(pdf_files), function(idx) {
+  # Use pdf_filenames for parsing to get year and company abbreviation
+  parsed_info <- parse_filename(pdf_filenames[idx])
+  
+  # Use pdf_files to extract text content from the PDF
+  text_content <- paste(pdf_text(pdf_files[idx]), collapse = " ")
+  
+  # Combine parsed info with text content into a single tibble row
+  parsed_info <- mutate(parsed_info, text_content = text_content)
+  
+  return(parsed_info)
+})
+
+```
+
+View the tibble
+
+```{r}
+# View the first few rows of the tibble
+head(annual_reports)
+#tail(annual_reports)
+#class(annual_reports)
+```
+
+### Include doc_id in annual reports
+
+```{r}
+annual_reports <- mutate(annual_reports,
+         doc_id = paste(company_abbreviation, year, sep = "_"))
+
+head(annual_reports)
+```
+
+# Create a mapping of company abbreviations and names to their respective industries
+
+```{r}
+# Create a mapping of company abbreviations and names to their respective industries
+industry_mapping <- data.frame(
+  company_abbreviation = c("UNH", "JNJ", "MRK", "AMGN", "MSFT", "AAPL", "CRM", "INTC", 
+                           "GS", "V", "JPM", "AXP", "HD", "WMT", "PG", "NKE"),
+  company_name = c("UnitedHealth Group", "Johnson & Johnson", "Merck & Co.", "Amgen", 
+                   "Microsoft", "Apple", "Salesforce", "Intel Corporation", 
+                   "Goldman Sachs", "Visa", "JPMorgan Chase", "American Express", 
+                   "Home Depot", "Walmart", "Procter & Gamble", "Nike"),
+  industry = c("Healthcare", "Healthcare", "Healthcare", "Healthcare", 
+               "Technology", "Technology", "Technology", "Technology", 
+               "Financial Services", "Financial Services", "Financial Services", "Financial Services",
+               "FMCG", "FMCG", "FMCG", "FMCG")
+)
+
+# Join the industry mapping to the 'annual_reports' dataframe
+annual_reports <- annual_reports %>%
+  left_join(industry_mapping, by = "company_abbreviation")
+
+# Check the first few rows to confirm the join
+head(annual_reports)
+
+```
+
+# Step 3: Basic Text Preprocessing
+### Cleaning up
+```{r}
+
+annual_reports <- annual_reports %>%
+  mutate(
+    text_content = tolower(text_content),  # Convert text to lowercase
+    text_content = str_remove_all(text_content, "[^\\w\\s]"),  # Remove punctuation
+    text_content = str_remove_all(text_content, "\\d+")  # Remove numbers
+  )
+
+```
+
+# Step 4: Tokenization & TF Analysis
+```{r}
+
+# Tokenization and calculating term frequency
+tokenized_terms <- annual_reports %>%
+  unnest_tokens(word, text_content) %>%
+  count(doc_id, industry, company_abbreviation, company_name, year, word, sort = TRUE)  # Count words, grouped by company and year
+
+# View the top terms per company per year
+head(tokenized_terms)
+
+```
+
+# Step 5:Developing Custom Stopwords Library
+```{r}
+
+custom_stopwords <- c(
+  "financial", "fiscal", "firm", "statement", "report", "year", 
+  "company", "business", "date", "aa", "income", "stock", "shares", "stocks",
+  "management", "operations", "performance", "results", "objective",
+  "strategy", "risk", "opportunity", "outlook", "significantly",
+  "approximately", "primarily", "including", "regarding", "concerning",
+  "due to", "pursuant", "accordance", "thereof", "therein", "hereby",
+  "hereto", "hereunder", "usd", "ebitda", "gaap", "qoq", "yoy", "fy",
+  "qtr", "one", "two", "first", "second", "third", "quarter", "annual",
+  "monthly", "weekly", "day", "month", "year", "law", "regulation",
+  "section", "act", "legal", "compliance", "regulatory", "filings",
+  "securities", "exchange", "commission", "corporation", "incorporated",
+  "plc", "llc", "ltd", "group", "holdings", "united states", "us", "usa",
+  "america", "north america", "international", "global", "worldwide", "‰",
+  "return", "returns", "eps", "earnings per share", "roe", "return on equity",
+  "taxes", "ratio", "cash", "cash flow", "dividend", "revenue", "earnings",
+  "expense", "expenses", "asset", "liability", "leverage",
+  "patient", "customer", "marketing", "sales",
+  "sox", "sec", "sec filing", "ifrs", "audit",
+  
+  # Company names
+  "unitedhealth group", "unitedhealth", "uhg",
+  "johnson & johnson", "johnson and johnson", "johnson", "j&j", 
+  "merck", "merck & co", "mrk",
+  "amgen", "amgn",
+  "microsoft", "msft",
+  "apple", "aapl",
+  "salesforce", "crm",
+  "intel", "intel corporation", "intc",
+  "goldman sachs", "goldman", "gs", "sachs",
+  "visa", "v",
+  "jpmorgan chase", "jpmorgan", "jpm", "chase",
+  "american express", "amex", "axp",
+  "home depot", "hd",
+  "walmart", "wmt",
+  "procter & gamble", "pg", "p&g", "procter", "gamble",
+  "nike", "nke"
+)
+
+# Create a tibble for custom stopwords to match tidytext format
+custom_stopwords_df <- tibble(word = custom_stopwords, lexicon = "custom")
+
+# Combine custom stopwords with standard English stopwords
+all_stopwords <- bind_rows(stop_words, custom_stopwords_df)
+```
+
+#Remove Stopwords
+#### From tokenized
+```{r}
+# Removing stopwords
+clean_terms <- tokenized_terms %>%
+  anti_join(all_stopwords, by = "word")
+
+head(clean_terms)
+tail(clean_terms)
+```
+#### From untokenized
+```{r}
+# Let's first tokenize the text content
+
+# Tokenize the text content
+full_tokens <- annual_reports %>%
+  unnest_tokens(word, text_content)
+
+# Ensure all tokens are lowercase (assuming your stopwords are all lowercase)
+#tokens$word <- tolower(tokens$word)
+
+# Load standard English stopwords from the tidytext package
+#data("stop_words")
+
+# Combine custom stopwords with tidytext's stopwords if you have custom ones
+# custom_stopwords <- tibble(word = c("your", "custom", "stopwords", "..."))
+# all_stopwords <- bind_rows(stop_words, custom_stopwords)
+
+# Now, filter out the stopwords from the tokens
+clean_full_tokens <- full_tokens %>%
+  anti_join(all_stopwords, by = "word")
+
+# If you need to reassemble the cleaned text for each document:
+clean_annual_reports <- clean_full_tokens %>%
+  group_by(doc_id, industry, year, company_abbreviation, company_name) %>%
+  summarize(text_content = paste(word, collapse = " ")) %>%
+  ungroup()
+
+head(clean_annual_reports)
+
+# clean_annual_reports now contains the cleaned text_content without stopwords
+```
+
+# Research Question 1
+
+### Term Frequency-Inverse Document Frequency (TF-IDF) for the words across the annual reports
+
+```{r}
+
+# Document Frequency (DF)
+# Count how many documents each word appears in
+document_freq <- clean_terms %>%
+  group_by(word) %>%
+  summarise(n_docs = n_distinct(year))
+
+# 3. Inverse Document Frequency (IDF)
+# Calculate IDF
+total_documents <- n_distinct(clean_terms$year)
+idf <- mutate(document_freq, idf = log(total_documents / n_docs))
+
+# 4. TF-IDF Calculation
+# Join TF and IDF values and calculate TF-IDF
+tf_idf <- clean_terms %>%
+  inner_join(idf, by = "word") %>%
+  mutate(tf_idf = n * idf)
+
+# Optional step: Remove extremely common words if necessary
+tf_idf <- tf_idf %>%
+  filter(!word %in% c("the", "of", "and", "to", "in", "for", "on", "with", "as", "by"))
+
+# Sort by TF-IDF to find the most important words
+tf_idf <- tf_idf %>%
+  arrange(desc(tf_idf))
+
+# View the results
+head(tf_idf)
+tf_idf
+
+```
+
+
+The head of the tf_idf tibble points to terms with high TF-IDF scores, highlighting words like "licence" and "commercialisation" for AMGN in 2023, and "series" and "swing" for companies like GS and V in various years. High scores signify these terms' uniqueness or emphasis within particular documents, indicating a specific focus for those companies in those years. For example, the unique terms for AMGN suggest a focus on licensing and commercialization in 2023. The term "series" for GS, despite appearing in several documents, still garners a significant score, suggesting a potential emphasis on financial instruments or classifications like series bonds or stock series.
+
+Conversely, the tail of the tf_idf tibble showcases terms with lower TF-IDF scores, which include "commodities," "financings," and "arbitration." These terms are more common across multiple documents and do not feature prominently within any single report. Their presence across various documents reduces their TF-IDF score, implying they are part of the standard lexicon in annual reports and are not indicative of particular corporate priorities or trends.
+
+In synthesis, the high TF-IDF terms are potentially more informative about a company's strategic focus in a given year, hinting at specific initiatives or concerns that are top of mind. They warrant further investigation into the context of their usage within the reports. Low TF-IDF terms, while relevant to the industry and necessary in reporting, offer less in the way of distinguishing between the strategic directions of different companies or identifying sector-wide trends. They serve as background industry language that, while important, is not as indicative of individual company focus or unique industry developments.
+
+#### Bar Chart for Top TF-IDF Scores
+```{r}
+
+# Let's take the top 10 words for simplicity
+top_tfidf <- tf_idf %>%
+  arrange(desc(tf_idf)) %>%
+  top_n(10, tf_idf)
+
+# Create a bar chart
+ggplot(top_tfidf, aes(x = reorder(word, tf_idf), y = tf_idf, fill = industry)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +  # Flip coordinates to make it easier to read long words
+  labs(title = "Top TF-IDF Scores by Word",
+       x = "Term",
+       y = "TF-IDF Score") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Paired")  # Optional: use a color palette for visual distinction
+
+```
+#### Heatmap of TF-IDF by Company and Year
+```{r}
+
+# Assuming `tf_idf` is your dataframe with the TF-IDF results
+# Select the top 10 words by TF-IDF score
+top_terms <- tf_idf %>%
+  arrange(desc(tf_idf)) %>%
+  slice(1:30) %>%
+  .$word  # Extract just the words
+
+# Filter the original tf_idf data to only include the top terms
+top_tfidf <- tf_idf %>%
+  filter(word %in% top_terms)
+
+# Create the heatmap
+ggplot(top_tfidf, aes(x = year, y = word, fill = tf_idf)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "blue") +
+  labs(title = "Top 10 TF-IDF Terms by Year",
+       x = "Year",
+       y = "Term",
+       fill = "TF-IDF Score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))  # Rotate x labels for better readability
+
+```
+When taken together, these visualizations reveal both the overall importance of certain terms within the corpus (bar chart) and their specific relevance across different temporal segments (heatmap). For example, while "licence" has a significant TF-IDF score overall, it is particularly dominant in one year, suggesting a pivotal event or initiative related to licensing in that year.
+
+The use of terms such as "commercialisation," "series," and "swing" across several years points to ongoing strategic themes within their respective industries. Conversely, some terms appear to be more transient, emerging strongly in one year and fading in others, potentially reflecting temporary strategic shifts, market conditions, or regulatory changes.
+
+
+### N-Grams Analysis
+
+#### Bigrams analysis
+```{r}
+
+# Generate bigrams
+bigrams <- annual_reports %>%
+  unnest_tokens(bigram, text_content, token = "ngrams", n = 2) %>%
+  group_by(doc_id, industry, company_name, year) %>%
+  count(bigram, sort = TRUE) %>%
+  ungroup() %>%
+  separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+  mutate(bigram = paste(word1, word2, sep = " ")) %>%  # Add this line to reassemble bigrams
+  #select(-word1, -word2) %>%  # Remove individual word columns
+  anti_join(all_stopwords, by = c("word1" = "word")) %>%
+  anti_join(all_stopwords, by = c("word2" = "word"))
+
+
+# View the most common bigrams (adjust as necessary for specific analyses)
+head(bigrams)
+#class(bigrams)
+#bigrams[bigrams$word1 == "goldman"]
+```
+
+#### Bigrams Plot
+```{r}
+
+# Aggregate bigram counts across all industries and years
+aggregated_bigrams <- bigrams %>%
+  group_by(word1, word2) %>%
+  summarize(n = sum(n), .groups = 'drop') %>%
+  arrange(desc(n))
+
+# Take the top 10 bigrams for visualization
+top_bigrams <- head(aggregated_bigrams, 10)
+
+# Combine word1 and word2 into a bigram column for the top bigrams
+top_bigrams <- top_bigrams %>%
+  unite("bigram", word1, word2, sep = " ")
+
+# Plot the top bigrams
+ggplot(top_bigrams, aes(x = reorder(bigram, n), y = n, fill = bigram)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(x = NULL, y = "Frequency", title = "Top 10 Bigrams in the Corpus") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+#### Trigrams analysis
+```{r}
+# Generate trigrams
+trigrams <- annual_reports %>%
+  unnest_tokens(trigram, text_content, token = "ngrams", n = 3) %>%
+  select(doc_id, industry, company_name, year, trigram) %>%
+  count(doc_id, industry, company_name, year, trigram, sort = TRUE)
+
+# Separate the trigram into three words
+trigram_separated <- trigrams %>%
+  separate(trigram, into = c("word1", "word2", "word3"), sep = " ")
+
+# Filter out trigrams that have stopwords as any word if necessary
+trigram_separated <- trigram_separated %>%
+  anti_join(all_stopwords, by = c("word1" = "word")) %>%
+  anti_join(all_stopwords, by = c("word2" = "word")) %>%
+  anti_join(all_stopwords, by = c("word3" = "word"))
+
+# View the most common trigrams
+print(trigram_separated)
+print(trigrams)
+```
+
+#### Trigrams Plot
+```{r}
+# Aggregate trigram counts across all industries and years
+aggregated_trigrams <- trigram_separated %>%
+  group_by(word1, word2, word3) %>%
+  summarize(n = sum(n), .groups = 'drop') %>%
+  arrange(desc(n))
+
+# Take the top trigrams for visualization
+top_trigrams <- head(aggregated_trigrams, 10)
+
+# Combine the separated words back into a trigram column for the top trigrams
+top_trigrams <- top_trigrams %>%
+  unite("trigram", word1, word2, word3, sep = " ")
+
+# Plot the top trigrams
+ggplot(top_trigrams, aes(x = reorder(trigram, n), y = n, fill = trigram)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(x = NULL, y = "Frequency", title = "Top 10 Trigrams in the Corpus") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+# Research Question 3
+#### Bigrams For one industry
+```{r}
+
+# Step 1: Generate bigrams
+bigrams3 <- clean_annual_reports %>%
+  unnest_tokens(bigram, text_content, token = "ngrams", n = 2) %>%
+  group_by(doc_id, industry, year) %>%
+  ungroup()
+
+# Step 2: Count the frequency of bigrams within each industry
+bigram_freq <- bigrams3 %>%
+  count(doc_id, industry, company_abbreviation, bigram) %>%
+  anti_join(all_stopwords, by = c("bigram" = "word"))
+
+
+# Steps 3-4: Calculate the number of documents per industry that each bigram appears in
+bigram_document_freq <- bigram_freq %>%
+  group_by(bigram, industry) %>%
+  summarize(n_docs = n_distinct(doc_id)) %>%
+  ungroup() %>%
+  left_join(bigram_freq %>%
+              group_by(industry) %>%
+              summarize(total_docs = n_distinct(doc_id)) %>%
+              ungroup(),
+            by = "industry") %>%
+  mutate(idf = log(total_docs / n_docs),
+         total_docs = NULL)
+
+# Steps 5-6: Calculate TF-IDF
+tf_idf_by_industry <- bigram_freq %>%
+  left_join(bigram_document_freq, by = c("bigram", "industry")) %>%
+  mutate(tf_idf = n * idf)
+
+# Steps 7-8: Filter and view the top bigrams for a single industry
+top_tfidf_financial <- tf_idf_by_industry %>%
+  arrange(desc(tf_idf)) %>%
+  group_by(industry) %>%
+  top_n(15, tf_idf) %>%
+  ungroup() %>%
+  filter(industry == "Financial Services")
+
+# Step 9: Visualize the top TF-IDF bigrams for the financial industry
+ggplot(top_tfidf_financial, aes(x = reorder(bigram, tf_idf), y = tf_idf, fill = industry)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(x = "Bigram", y = "TF-IDF Score", title = "Top TF-IDF Bigrams in Financial Services") +
+  theme_minimal()
+
+```
+
+
+#### Bigrams for all industry
+```{r}
+
+# Steps 7-8: Filter and view the top bigrams for all industries
+top_tfidf_all <- tf_idf_by_industry %>%
+  arrange(industry, desc(tf_idf)) %>%
+  #arrange(industry) %>%
+  group_by(industry) %>%
+  top_n(5, tf_idf) %>%
+  ungroup()
+
+# Filter s
+# Step 9: Visualize the top TF-IDF bigrams for all industries
+ggplot(top_tfidf_all, aes(x = reorder(bigram, tf_idf), y = tf_idf, fill = industry)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(x = "Bigram", y = "TF-IDF Score", title = "Top TF-IDF Bigrams by Industry") +
+  theme_minimal()
+
+```
+
+#### Bigrams for companies
+```{r}
+
+# Assuming 'bigrams' contains your bigram data with 'company_abbreviation' and 'industry' columns.
+# First, count the bigrams for each company's documents.
+bigram_counts <- bigrams %>%
+  count(company_name, bigram, sort = TRUE)
+
+# Calculate the document frequency for each bigram across all companies.
+document_freq <- bigram_counts %>%
+  group_by(bigram) %>%
+  summarize(n_docs = n_distinct(company_name)) %>%
+  ungroup()
+
+# Calculate IDF for each bigram.
+idf <- document_freq %>%
+  mutate(idf = log(n_distinct(bigrams$company_name) / n_docs))
+
+# Join with the bigram counts to calculate the TF-IDF score for each bigram in each company's documents.
+tf_idf <- bigram_counts %>%
+  left_join(idf, by = "bigram") %>%
+  mutate(tf_idf = n * idf)
+
+# Now, select the top bigrams for each company based on the TF-IDF score.
+top_tfidf_by_company <- tf_idf %>%
+  group_by(company_name) %>%
+  top_n(3, tf_idf) %>%
+  ungroup()
+
+# Optionally, you can also join back with the industry information if needed.
+top_tfidf_by_company <- top_tfidf_by_company %>%
+  left_join(bigrams %>% select(company_name, industry) %>% distinct(), by = "company_name")
+
+# Now you can view or save the result
+print(head(top_tfidf_by_company))
+print(tail(top_tfidf_by_company))
+
+# Create a summary table for the top bigrams by company
+summary_table <- top_tfidf_by_company %>%
+  arrange(industry, company_name, desc(tf_idf)) %>%
+  group_by(industry, company_name) %>%
+  slice_max(order_by = tf_idf, n = 3) %>%
+  ungroup() %>%
+  select(company_name, bigram, tf_idf)
+
+# Print the table to the R console
+#print(summary_table)
+
+# If the table is too large, you can use the `head` function to display the first few rows
+print(head(summary_table))
+print(tail(summary_table))
+
+# Or write it out to a CSV file for opening in Excel or similar
+#write.csv(summary_table, "top_bigrams_by_company.csv", row.names = FALSE)
+
+```
+#### Trigrams
+```{r}
+
+# View the top trigrams for each company
+top_trigrams_by_company <- trigram_separated %>%
+  group_by(company_name) %>%
+  top_n(1, n) %>%
+  ungroup()
+
+# Print the top trigrams for each company
+print(top_trigrams_by_company)
+
+```
+
+# Research Question 2
+
+#### Sentiment Analysis per Company
+
+```{r}
+
+# Assuming 'annual_reports' has columns 'text_content', 'company_abbreviation', and 'year'
+
+# Step 1: Unnest text content into sentences or words
+words <- annual_reports %>%
+  unnest_tokens(word, text_content)
+
+# Step 2: Get sentiment scores using a sentiment lexicon
+sentiment_lexicon <- get_sentiments("afinn")  # bing or AFINN
+sentiment_scores <- inner_join(words, sentiment_lexicon, by = "word")
+
+sentiment_scores
+
+# Step 3: Aggregate sentiment scores by year (and company if needed)
+annual_sentiment <- sentiment_scores %>%
+  group_by(year, company_name, company_abbreviation) %>%
+  summarize(sentiment_score = sum(value), .groups = 'drop')
+
+# Step 4: Create a time-series plot for sentiment over time
+ggplot(annual_sentiment, aes(x = year, y = sentiment_score, group = company_name, color = company_name)) +
+  geom_line() +
+  theme_minimal() +
+  labs(title = "Annual Sentiment in Reports", x = "Year", y = "Sentiment Score")
+
+# Alternative plot
+ggplot(annual_sentiment, aes(x = year, y = sentiment_score, group = company_name, color = company_name)) +
+  geom_line() +
+  facet_wrap(~company_name, scales = "free_y", ncol = 4) +  # Adjust the number of columns as needed
+  theme_minimal() +
+  labs(title = "Annual Sentiment in Reports over 5 FYs", x = "Year", y = "Sentiment Score") +
+  theme(#strip.text = element_blank(),  # Remove facet labels
+        axis.text = element_blank(),   # Remove axis text
+        axis.title = element_blank()
+        ) +  # Remove axis titles
+  guides(color = FALSE)
+  
+
+# This will plot sentiment trends for each company. To see industry-wide trends, group by industry.
+
+```
+
+
+#### Sentiment Analysis by Industry
+```{r}
+# Aggregate sentiment scores by year and industry
+annual_sentiment_by_industry <- sentiment_scores %>%
+  group_by(year, industry, company_name, company_abbreviation) %>%
+  summarize(sentiment_score = sum(value), .groups = 'drop')
+
+# Create a time-series plot for sentiment over time by industry
+ggplot(annual_sentiment_by_industry, aes(x = year, y = sentiment_score, group = industry, color = industry)) +
+  geom_line() +
+  theme_minimal() +
+  labs(title = "Annual Sentiment in Reports by Industry", x = "Year", y = "Sentiment Score") +
+  facet_wrap(~ industry, scales = "free_y", ncol = 1) + # Adjust the number of columns as needed
+  guides(color = FALSE)
+```
+
+# Research Question 4: 
+#### Analysis
+```{r}
+
+# Assuming you have a sentiment score calculated and 'industry' variable in your dataset
+
+# Step 1: Aggregate sentiment scores by company within each industry
+sentiment_by_company_industry <- sentiment_scores %>%
+  group_by(industry, company_name) %>%
+  summarize(mean_sentiment = mean(value), .groups = 'drop')
+
+# Step 2: Perform sub-group comparisons within each industry
+# Note: This can be a visualization or a statistical test depending on the depth of analysis required
+
+# Alternative Plot
+ggplot(annual_sentiment_by_industry, aes(x = year, y = sentiment_score, group = company_name, color = industry)) +
+  geom_line() +
+  geom_text(data = annual_sentiment_by_industry %>% group_by(company_name) %>% filter(year == max(year)),
+            aes(label = company_abbreviation), 
+            hjust = 1.1, vjust = 0, 
+            size = 3,
+            color = "black",
+            check_overlap = TRUE, 
+            angle = 0) +  # adjust the angle if needed
+  theme_minimal() +
+  labs(title = "Annual Sentiment in Reports", x = "Year", y = "Sentiment Score") +
+  facet_wrap(~ industry, scales = "free_y") +
+  theme(legend.position = "none")  # This will remove the legend
+
+
+# For Statistical Testing (e.g., ANOVA):
+# Assuming sentiment_scores also has 'value' as the sentiment score column
+anova_results <- sentiment_by_company_industry %>%
+  group_by(industry) %>%
+  do(tidy(aov(mean_sentiment ~ company_name, data = .)))
+
+anova_results
+
+# Step 3: Interpret the results
+# Depending on the outcome of the visualization or statistical test, draw conclusions about 
+# the different strategic postures or conditions of companies within the same industry.
+
+```
+
